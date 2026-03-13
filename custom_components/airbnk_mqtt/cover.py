@@ -101,4 +101,3 @@ class AirbnkCover(CoverEntity):
             await self._device.operateLock(0)  # 0 = lock direction
         except Exception as err:
             _LOGGER.error("Failed to lock Airbnk device: %s", err)
-``
