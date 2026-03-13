@@ -5,7 +5,6 @@ import logging
 import voluptuous as vol
 
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
-from homeassistant.helpers.typing import HomeAssistantType
 from homeassistant.const import CONF_TOKEN, SERVICE_RELOAD
 
 from .airbnk_api import AirbnkApi
