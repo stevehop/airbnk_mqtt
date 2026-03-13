@@ -1,96 +1,86 @@
-"""Support for Airbnk binary sensors."""
+"""Binary sensors for Airbnk MQTT integration (modern HA enums)."""
 from __future__ import annotations
-import logging
 
-from homeassistant.components.binary_sensor import (
-    BinarySensorEntity,
-)
-from homeassistant.const import (
-    DEVICE_CLASS_BATTERY,
-)
+import logging
+from typing import Any, Callable
+
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import Entity
+from homeassistant.components.binary_sensor import BinarySensorEntity, BinarySensorDeviceClass
 
 from .const import (
-    DOMAIN as AIRBNK_DOMAIN,
+    DOMAIN,
     AIRBNK_DEVICES,
     SENSOR_TYPE_BATTERY_LOW,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
-SENSOR_ICON = "hass:post-outline"
 
+async def async_setup_entry(hass: HomeAssistant, entry, async_add_entities):
+    """Set up Airbnk binary sensors from a config entry."""
+    devices = hass.data[DOMAIN].get(AIRBNK_DEVICES, {})
+    entities: list[AirbnkBinarySensor] = []
 
-async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    """Old way of setting up the platform.
+    for dev_id, device in devices.items():
+        # Low battery (if device populates SENSOR_TYPE_BATTERY_LOW)
+        entities.append(AirbnkBatteryLowBinarySensor(hass, device, SENSOR_TYPE_BATTERY_LOW))
 
-    Can only be called when a user accidentally mentions the platform in their
-    config. But even in that case it would have been ignored.
-    """
-
-
-async def async_setup_entry(hass, entry, async_add_entities):
-    """Set up Airbnk sensors based on config_entry."""
-    sensors = []
-    for dev_id, device in hass.data[AIRBNK_DOMAIN][AIRBNK_DEVICES].items():
-        sensor = AirbnkBinarySensor(hass, device, SENSOR_TYPE_BATTERY_LOW)
-        sensors.append(sensor)
-    async_add_entities(sensors)
+    if entities:
+        async_add_entities(entities)
 
 
 class AirbnkBinarySensor(BinarySensorEntity):
-    """Representation of a Binary Sensor."""
+    """Base class for Airbnk binary sensors."""
 
-    def __init__(self, hass, device, monitored_attr: str):
-        """Initialize the sensor."""
+    _attr_should_poll = False
+
+    def __init__(self, hass: HomeAssistant, device, key: str) -> None:
         self.hass = hass
         self._device = device
-        self._monitored_attribute = monitored_attr
-        deviceName = self._device._lockConfig["deviceName"]
-        self._name = f"{deviceName} Battery Low"
+        self._key = key
+        self._unsubscribe: Callable[[], None] | None = None
 
-    async def async_added_to_hass(self):
-        """Run when this Entity has been added to HA."""
-        # Sensors should also register callbacks to HA when their state changes
-        self._device.register_callback(self.async_write_ha_state)
+        dev_name = self._device._lockConfig.get("deviceName", "Airbnk Lock")
+        self._attr_name = f"{dev_name} {self._friendly_name_for_key(key)}"
+        self._attr_unique_id = f'{self._device._lockConfig.get("sn","unknown")}_{key}'
 
-    @property
-    def available(self):
-        """Return if entity is available or not."""
-        return self._device.is_available
+    async def async_added_to_hass(self) -> None:
+        def _cb():
+            self.async_write_ha_state()
 
-    @property
-    def unique_id(self):
-        """Return a unique ID."""
-        devID = self._device._lockConfig["sn"]
-        return f"{devID}_{self._monitored_attribute}"
+        if hasattr(self._device, "register_callback"):
+            self._device.register_callback(_cb)
+            if hasattr(self._device, "deregister_callback"):
+                self._unsubscribe = lambda: self._device.deregister_callback(_cb)
 
-    @property
-    def name(self):
-        """Return the name of the sensor."""
-        return self._name
+    async def async_will_remove_from_hass(self) -> None:
+        if self._unsubscribe:
+            try:
+                self._unsubscribe()
+            except Exception:
+                pass
 
     @property
-    def device_info(self):
-        """Return a device description for device registry."""
-        return self._device.device_info
+    def available(self) -> bool:
+        return getattr(self._device, "is_available", True)
 
     @property
-    def state(self):
-        """Return the state of the sensor."""
-        if self._monitored_attribute in self._device._lockData:
-            return self._device._lockData[self._monitored_attribute]
-        return None
+    def is_on(self) -> bool | None:
+        data = getattr(self._device, "_lockData", {})
+        return bool(data.get(self._key)) if self._key in data else None
+
+    def _friendly_name_for_key(self, key: str) -> str:
+        # Minimal mapping; expand if you have more binary sensors
+        if key == SENSOR_TYPE_BATTERY_LOW:
+            return "Battery Low"
+        return key
+
+
+class AirbnkBatteryLowBinarySensor(AirbnkBinarySensor):
+    """Binary sensor representing low battery condition."""
 
     @property
-    def device_class(self):
-        """Return the class of this device."""
-        return DEVICE_CLASS_BATTERY
-
-    @property
-    def icon(self):
-        """Return the icon of this device."""
-        return None
-
-    async def async_update(self):
-        """Retrieve latest state."""
-        # _LOGGER.debug("async_update")
+    def device_class(self) -> BinarySensorDeviceClass | None:
+        return BinarySensorDeviceClass.BATTERY
+``
