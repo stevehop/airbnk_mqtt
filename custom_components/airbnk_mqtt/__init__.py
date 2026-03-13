@@ -1,9 +1,12 @@
 """Platform for the Airbnk MQTT-based integration."""
+from __future__ import annotations
+
 import asyncio
 import datetime
 import logging
 import voluptuous as vol
 
+from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.const import CONF_TOKEN, SERVICE_RELOAD
 
@@ -39,8 +42,8 @@ COMPONENT_TYPES = ["binary_sensor", "cover", "sensor"]
 CONFIG_SCHEMA = vol.Schema(vol.All({DOMAIN: vol.Schema({})}), extra=vol.ALLOW_EXTRA)
 
 
-async def async_setup(hass, config):
-    """Setup the Airbnk component."""
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Set up the Airbnk component."""
 
     async def _handle_reload(service):
         """Handle reload service call."""
@@ -56,6 +59,7 @@ async def async_setup(hass, config):
         await asyncio.gather(*reload_tasks)
         _LOGGER.debug("RELOAD DONE")
 
+    # Admin-only reload service
     hass.helpers.service.async_register_admin_service(
         DOMAIN,
         SERVICE_RELOAD,
@@ -76,12 +80,11 @@ async def async_setup(hass, config):
     return True
 
 
-async def async_migrate_entry(hass, config_entry: ConfigEntry):
+async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Migrate old entry."""
     _LOGGER.debug("Migrating from version %s", config_entry.version)
 
     if config_entry.version == 1:
-
         new_data = {**config_entry.data}
         device_configs = new_data[CONF_DEVICE_CONFIGS]
         for dev_id, dev_config in device_configs.items():
@@ -107,17 +110,16 @@ async def async_migrate_entry(hass, config_entry: ConfigEntry):
         hass.config_entries.async_update_entry(config_entry, data=new_data)
 
     _LOGGER.info("Migration to version %s successful", config_entry.version)
-
     return True
 
 
-async def async_setup_entry(hass: HomeAssistantType, entry: ConfigEntry):
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Establish connection with Airbnk."""
-
     device_configs = entry.data[CONF_DEVICE_CONFIGS]
     entry.add_update_listener(async_options_updated)
     _LOGGER.debug("DEVICES ARE %s", device_configs)
-    lock_devices = {}
+
+    lock_devices: dict[str, CustomMqttLockDevice | TasmotaMqttLockDevice] = {}
     for dev_id, dev_config in device_configs.items():
         if dev_config[CONF_DEVICE_MQTT_TYPE] == CONF_CUSTOM_MQTT:
             lock_devices[dev_id] = CustomMqttLockDevice(hass, dev_config, entry.options)
@@ -127,7 +129,8 @@ async def async_setup_entry(hass: HomeAssistantType, entry: ConfigEntry):
             )
         await lock_devices[dev_id].mqtt_subscribe()
 
-    hass.data[DOMAIN] = {AIRBNK_DEVICES: lock_devices}
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][AIRBNK_DEVICES] = lock_devices
 
     for component in COMPONENT_TYPES:
         hass.async_create_task(
@@ -136,36 +139,31 @@ async def async_setup_entry(hass: HomeAssistantType, entry: ConfigEntry):
     return True
 
 
-async def async_options_updated(hass, entry):
+async def async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Triggered by config entry options updates."""
     for dev_id, device in hass.data[DOMAIN][AIRBNK_DEVICES].items():
         device.set_options(entry.options)
 
 
-async def async_unload_entry(hass, config_entry):
+async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     _LOGGER.debug("Unloading %s %s", config_entry.entry_id, config_entry.data)
 
-    # Create a list of coroutines to be awaited
     tasks = [
         hass.config_entries.async_forward_entry_unload(config_entry, component)
         for component in COMPONENT_TYPES
     ]
-
-    # Await each coroutine individually
     await asyncio.gather(*tasks)
 
     for dev_id, device in hass.data[DOMAIN][AIRBNK_DEVICES].items():
         _LOGGER.debug("Unsubscribing %s", dev_id)
         await device.mqtt_unsubscribe()
 
-    hass.data[DOMAIN].pop(AIRBNK_DEVICES)
-    # if not hass.data[DOMAIN]:
-    #     hass.data.pop(DOMAIN)
+    hass.data[DOMAIN].pop(AIRBNK_DEVICES, None)
     _LOGGER.debug("...done")
     return True
 
 
-async def airbnk_api_setup(hass, host, key, uuid, password):
-    """Create a Airbnk instance only once."""
+async def airbnk_api_setup(hass: HomeAssistant, host, key, uuid, password):
+    """Create an Airbnk instance only once."""
     return
