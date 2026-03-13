@@ -81,6 +81,7 @@ class CustomMqttLockDevice:
         self._callbacks = set()
         self._unsubscribe_callbacks = set()
         self._lockConfig = device_config
+        self._config_topic = self._lockConfig.get("deviceTopic", "parcel-box")
         self._codes_generator = AirbnkCodesGenerator()
         self._lockData = self._codes_generator.decryptKeys(
             device_config["newSninfo"], device_config["appKey"]
