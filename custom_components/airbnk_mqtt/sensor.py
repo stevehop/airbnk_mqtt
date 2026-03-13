@@ -1,21 +1,16 @@
-"""Airbnk sensors with corrected lock state + accurate MQTT battery telemetry."""
-
+"""Sensors for Airbnk MQTT integration (modern HA enums/units)."""
 from __future__ import annotations
+
 import logging
-from typing import Any, Optional, Callable
+from typing import Any, Callable, Optional
 
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import Entity
-from homeassistant.components.sensor import SensorDeviceClass
-
-from homeassistant.const import (
-    CONF_ICON,
-    CONF_NAME,
-    CONF_TYPE,
-    CONF_UNIT_OF_MEASUREMENT,
-)
+from homeassistant.components.sensor import SensorEntity, SensorDeviceClass
+from homeassistant.const import PERCENTAGE, UnitOfElectricPotential, UnitOfTime
 
 from .const import (
-    DOMAIN as AIRBNK_DOMAIN,
+    DOMAIN,
     AIRBNK_DEVICES,
     SENSOR_TYPE_STATE,
     SENSOR_TYPE_BATTERY,
@@ -23,69 +18,44 @@ from .const import (
     SENSOR_TYPE_LAST_ADVERT,
     SENSOR_TYPE_LOCK_EVENTS,
     SENSOR_TYPE_SIGNAL_STRENGTH,
-    SENSOR_TYPES,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
 
-async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    """Deprecated classic setup."""
-    return
-
-
-async def async_setup_entry(hass, entry, async_add_entities):
-    """Set up sensor entities from config entry."""
-    devices = hass.data[AIRBNK_DOMAIN][AIRBNK_DEVICES]
-    entities = []
+async def async_setup_entry(hass: HomeAssistant, entry, async_add_entities):
+    devices = hass.data[DOMAIN].get(AIRBNK_DEVICES, {})
+    entities: list[AirbnkSensor] = []
 
     for dev_id, device in devices.items():
-        # Legacy Airbnk sensors (some overridden)
-        for monitored_attr in SENSOR_TYPES:
-            entities.append(AirbnkSensor.factory(hass, device, monitored_attr))
+        # Map your known sensors; add/remove per your integration
+        entities.append(AirbnkTextSensor(hass, device, SENSOR_TYPE_STATE))
+        entities.append(AirbnkBatteryPercentSensor(hass, device, SENSOR_TYPE_BATTERY))
+        entities.append(AirbnkVoltageSensor(hass, device, SENSOR_TYPE_VOLTAGE))
+        entities.append(AirbnkLastAdvertSensor(hass, device, SENSOR_TYPE_LAST_ADVERT))
+        entities.append(AirbnkSignalStrengthSensor(hass, device, SENSOR_TYPE_SIGNAL_STRENGTH))
+        entities.append(AirbnkLockEventsSensor(hass, device, SENSOR_TYPE_LOCK_EVENTS))
 
-        # Accurate MQTT battery sensors from ESPHome
-        entities.append(AirbnkMQTTBatteryPercent(hass, device))
-        entities.append(AirbnkMQTTBatteryVoltage(hass, device))
-
-    async_add_entities(entities, update_before_add=True)
+    if entities:
+        async_add_entities(entities)
 
 
-# ---------------------------------------------------------------------------
-# Base Sensor
-# ---------------------------------------------------------------------------
+class AirbnkSensor(SensorEntity):
+    """Base class for Airbnk sensors."""
 
-class AirbnkSensor(Entity):
-    """Base class for all Airbnk sensors."""
+    _attr_should_poll = False
 
-    @property
-    def should_poll(self):
-        return False
-
-    @staticmethod
-    def factory(hass, device, attr):
-        mapping = {
-            SENSOR_TYPE_STATE: AirbnkStateSensor,
-            SENSOR_TYPE_BATTERY: AirbnkLegacyBatterySensor,
-            SENSOR_TYPE_VOLTAGE: AirbnkTextSensor,
-            SENSOR_TYPE_SIGNAL_STRENGTH: AirbnkTextSensor,
-            SENSOR_TYPE_LAST_ADVERT: AirbnkTextSensor,
-            SENSOR_TYPE_LOCK_EVENTS: AirbnkTextSensor,
-        }
-        cls = mapping[SENSOR_TYPES[attr][CONF_TYPE]]
-        return cls(hass, device, attr)
-
-    def __init__(self, hass, device, attr):
+    def __init__(self, hass: HomeAssistant, device, key: str) -> None:
         self.hass = hass
         self._device = device
-        self._attr = attr
-        self._sensor_def = SENSOR_TYPES[attr]
-        devname = self._device._lockConfig.get("deviceName", "Airbnk Lock")
-        self._name = f"{devname} {self._sensor_def[CONF_NAME]}"
-        self._unsubscribe = None
+        self._key = key
+        self._unsubscribe: Callable[[], None] | None = None
 
-    async def async_added_to_hass(self):
-        """Register callback for push updates."""
+        dev_name = self._device._lockConfig.get("deviceName", "Airbnk Lock")
+        self._attr_name = f"{dev_name} {self._friendly_name_for_key(key)}"
+        self._attr_unique_id = f'{self._device._lockConfig.get("sn","unknown")}_{key}'
+
+    async def async_added_to_hass(self) -> None:
         def _cb():
             self.async_write_ha_state()
 
@@ -94,7 +64,7 @@ class AirbnkSensor(Entity):
             if hasattr(self._device, "deregister_callback"):
                 self._unsubscribe = lambda: self._device.deregister_callback(_cb)
 
-    async def async_will_remove_from_hass(self):
+    async def async_will_remove_from_hass(self) -> None:
         if self._unsubscribe:
             try:
                 self._unsubscribe()
@@ -102,165 +72,68 @@ class AirbnkSensor(Entity):
                 pass
 
     @property
-    def name(self):
-        return self._name
-
-    @property
-    def unique_id(self):
-        sn = self._device._lockConfig.get("sn", "unknown")
-        return f"{sn}_{self._attr}"
-
-    @property
-    def available(self):
+    def available(self) -> bool:
         return getattr(self._device, "is_available", True)
 
     @property
-    def icon(self):
-        return self._sensor_def.get(CONF_ICON)
-
-    @property
-    def device_class(self):
-        return self._sensor_def.get("SensorDeviceClass.DEVICE_CLASS")
-
-    @property
-    def unit_of_measurement(self):
-        return self._sensor_def.get(CONF_UNIT_OF_MEASUREMENT)
-
-    @property
-    def device_info(self):
-        return getattr(self._device, "device_info", None)
-
-    def _raw(self):
+    def native_value(self) -> Any:
         data = getattr(self._device, "_lockData", {})
-        return data.get(self._attr)
+        return data.get(self._key)
 
+    def _friendly_name_for_key(self, key: str) -> str:
+        mapping = {
+            SENSOR_TYPE_STATE: "Status",
+            SENSOR_TYPE_BATTERY: "Battery",
+            SENSOR_TYPE_VOLTAGE: "Battery Voltage",
+            SENSOR_TYPE_LAST_ADVERT: "Time from Last Advert",
+            SENSOR_TYPE_SIGNAL_STRENGTH: "Signal Strength",
+            SENSOR_TYPE_LOCK_EVENTS: "Lock Events Counter",
+        }
+        return mapping.get(key, key)
 
-# ---------------------------------------------------------------------------
-# Legacy sensors (kept for compatibility)
-# ---------------------------------------------------------------------------
 
 class AirbnkTextSensor(AirbnkSensor):
+    """State / text-like sensor (no device class)."""
+    # If you want state as a string, leave device_class unset.
+
+
+class AirbnkBatteryPercentSensor(AirbnkSensor):
     @property
-    def state(self):
-        return self._raw()
-
-
-class AirbnkLegacyBatterySensor(AirbnkSensor):
-    @property
-    def state(self):
-        return self._raw()
-
-
-# ---------------------------------------------------------------------------
-# Corrected State Sensor
-# ---------------------------------------------------------------------------
-
-class AirbnkStateSensor(AirbnkSensor):
-    """Fix the long-standing inverted state problem."""
-
-    @property
-    def state(self):
-        raw = self._raw()
-        if raw is None:
-            return None
-
-        s = str(raw).strip().lower()
-        if s == "locked":
-            return "unlocked"
-        if s == "unlocked":
-            return "locked"
-        return raw
-
-
-# ---------------------------------------------------------------------------
-# Accurate Battery Sensors (MQTT-backed)
-# ---------------------------------------------------------------------------
-
-class _AirbnkMQTTSensor(Entity):
-    """Base class for battery sensors sourced from ESPHome MQTT."""
-
-    should_poll = False
-
-    def __init__(self, hass, device):
-        self.hass = hass
-        self._device = device
-        self._value = None
-        self._unsubscribe = None
-
-    @property
-    def device_info(self):
-        return getattr(self._device, "device_info", None)
-
-    @property
-    def available(self):
-        return True
-
-    async def async_added_to_hass(self):
-        """Subscribe to MQTT telemetry topic."""
-        topic = self._topic
-
-        async def _cb(msg):
-            self._value = msg.payload
-            self.async_write_ha_state()
-
-        self._unsubscribe = await self.hass.components.mqtt.async_subscribe(
-            topic, _cb
-        )
-
-    async def async_will_remove_from_hass(self):
-        if self._unsubscribe:
-            self._unsubscribe()
-
-    @property
-    def state(self):
-        return self._value
-
-
-class AirbnkMQTTBatteryPercent(_AirbnkMQTTSensor):
-    @property
-    def name(self):
-        n = self._device._lockConfig.get("deviceName", "Airbnk Lock")
-        return f"{n} Battery"
-
-    @property
-    def unique_id(self):
-        sn = self._device._lockConfig.get("sn", "unknown")
-        return f"{sn}_battpct"
-
-    @property
-    def device_class(self):
+    def device_class(self) -> Optional[SensorDeviceClass]:
         return SensorDeviceClass.BATTERY
 
     @property
-    def unit_of_measurement(self):
-        return "%"
+    def native_unit_of_measurement(self) -> str:
+        return PERCENTAGE
 
+
+class AirbnkVoltageSensor(AirbnkSensor):
     @property
-    def _topic(self):
-        base = self._device._lockConfig.get("deviceTopic", "parcel-box")
-        return f"{base}/tele/battery_percent"
-
-
-class AirbnkMQTTBatteryVoltage(_AirbnkMQTTSensor):
-    @property
-    def name(self):
-        n = self._device._lockConfig.get("deviceName", "Airbnk Lock")
-        return f"{n} Battery Voltage"
-
-    @property
-    def unique_id(self):
-        sn = self._device._lockConfig.get("sn", "unknown")
-        return f"{sn}_battvolt"
-
-    @property
-    def device_class(self):
+    def device_class(self) -> Optional[SensorDeviceClass]:
         return SensorDeviceClass.VOLTAGE
 
     @property
-    def unit_of_measurement(self):
-        return "V"
+    def native_unit_of_measurement(self) -> str:
+        return UnitOfElectricPotential.VOLT
+
+
+class AirbnkLastAdvertSensor(AirbnkSensor):
+    @property
+    def native_unit_of_measurement(self) -> str:
+        return UnitOfTime.SECONDS
+
+
+class AirbnkSignalStrengthSensor(AirbnkSensor):
+    @property
+    def device_class(self) -> Optional[SensorDeviceClass]:
+        return SensorDeviceClass.SIGNAL_STRENGTH
 
     @property
-    def _topic(self):
-        base = self._device._lockConfig.get("deviceTopic", "parcel-box")
-        return f"{base}/tele/battery_voltage"
+    def native_unit_of_measurement(self) -> str:
+        # No UnitOfSignalStrength in current HA; literal string is fine
+        return "dBm"
+
+
+class AirbnkLockEventsSensor(AirbnkSensor):
+    """Counter-style sensor; no device class by default."""
+    # Add state_class if you want statistics support; otherwise leave as-is.
