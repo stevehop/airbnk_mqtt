@@ -1,11 +1,13 @@
-"""Support for Airbnk sensors."""
+"""Airbnk sensors with corrected lock state + accurate MQTT battery telemetry."""
+
 from __future__ import annotations
 import logging
+from typing import Any, Optional, Callable
 
 from homeassistant.helpers.entity import Entity
+from homeassistant.components.sensor import SensorDeviceClass
 
 from homeassistant.const import (
-    CONF_DEVICE_CLASS,
     CONF_ICON,
     CONF_NAME,
     CONF_TYPE,
@@ -26,122 +28,239 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-SENSOR_ICON = "hass:post-outline"
-
 
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    """Old way of setting up the platform.
-
-    Can only be called when a user accidentally mentions the platform in their
-    config. But even in that case it would have been ignored.
-    """
+    """Deprecated classic setup."""
+    return
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    """Set up Airbnk sensors based on config_entry."""
-    sensors = []
-    for dev_id, device in hass.data[AIRBNK_DOMAIN][AIRBNK_DEVICES].items():
-        for sensor_type in SENSOR_TYPES:
-            sensor = AirbnkSensor.factory(hass, device, sensor_type)
-            sensors.append(sensor)
-    async_add_entities(sensors)
+    """Set up sensor entities from config entry."""
+    devices = hass.data[AIRBNK_DOMAIN][AIRBNK_DEVICES]
+    entities = []
 
+    for dev_id, device in devices.items():
+        # Legacy Airbnk sensors (some overridden)
+        for monitored_attr in SENSOR_TYPES:
+            entities.append(AirbnkSensor.factory(hass, device, monitored_attr))
+
+        # Accurate MQTT battery sensors from ESPHome
+        entities.append(AirbnkMQTTBatteryPercent(hass, device))
+        entities.append(AirbnkMQTTBatteryVoltage(hass, device))
+
+    async_add_entities(entities, update_before_add=True)
+
+
+# ---------------------------------------------------------------------------
+# Base Sensor
+# ---------------------------------------------------------------------------
 
 class AirbnkSensor(Entity):
-    """Representation of a Sensor."""
+    """Base class for all Airbnk sensors."""
+
+    @property
+    def should_poll(self):
+        return False
 
     @staticmethod
-    def factory(hass, device, monitored_attr):
-        """Initialize any AirbnkSensor."""
-        cls = {
-            SENSOR_TYPE_STATE: AirbnkTextSensor,
-            SENSOR_TYPE_BATTERY: AirbnkBatterySensor,
+    def factory(hass, device, attr):
+        mapping = {
+            SENSOR_TYPE_STATE: AirbnkStateSensor,
+            SENSOR_TYPE_BATTERY: AirbnkLegacyBatterySensor,
             SENSOR_TYPE_VOLTAGE: AirbnkTextSensor,
             SENSOR_TYPE_SIGNAL_STRENGTH: AirbnkTextSensor,
             SENSOR_TYPE_LAST_ADVERT: AirbnkTextSensor,
             SENSOR_TYPE_LOCK_EVENTS: AirbnkTextSensor,
-        }[SENSOR_TYPES[monitored_attr][CONF_TYPE]]
-        return cls(hass, device, monitored_attr)
+        }
+        cls = mapping[SENSOR_TYPES[attr][CONF_TYPE]]
+        return cls(hass, device, attr)
 
-    def __init__(self, hass, device, monitored_attr: str):
-        """Initialize the sensor."""
+    def __init__(self, hass, device, attr):
         self.hass = hass
         self._device = device
-        self._monitored_attribute = monitored_attr
-        self._sensor = SENSOR_TYPES[monitored_attr]
-        deviceName = self._device._lockConfig["deviceName"]
-        self._name = f"{deviceName} {self._sensor[CONF_NAME]}"
+        self._attr = attr
+        self._sensor_def = SENSOR_TYPES[attr]
+        devname = self._device._lockConfig.get("deviceName", "Airbnk Lock")
+        self._name = f"{devname} {self._sensor_def[CONF_NAME]}"
+        self._unsubscribe = None
 
     async def async_added_to_hass(self):
-        """Run when this Entity has been added to HA."""
-        # Sensors should also register callbacks to HA when their state changes
-        self._device.register_callback(self.async_write_ha_state)
+        """Register callback for push updates."""
+        def _cb():
+            self.async_write_ha_state()
 
-    @property
-    def available(self):
-        """Return if entity is available or not."""
-        return self._device.is_available
+        if hasattr(self._device, "register_callback"):
+            self._device.register_callback(_cb)
+            if hasattr(self._device, "deregister_callback"):
+                self._unsubscribe = lambda: self._device.deregister_callback(_cb)
 
-    @property
-    def unique_id(self):
-        """Return a unique ID."""
-        devID = self._device._lockConfig["sn"]
-        return f"{devID}_{self._monitored_attribute}"
+    async def async_will_remove_from_hass(self):
+        if self._unsubscribe:
+            try:
+                self._unsubscribe()
+            except Exception:
+                pass
 
     @property
     def name(self):
-        """Return the name of the sensor."""
         return self._name
 
     @property
-    def device_info(self):
-        """Return a device description for device registry."""
-        return self._device.device_info
+    def unique_id(self):
+        sn = self._device._lockConfig.get("sn", "unknown")
+        return f"{sn}_{self._attr}"
 
     @property
-    def state(self):
-        """Return the state of the sensor."""
-        raise NotImplementedError
-
-    @property
-    def device_class(self):
-        """Return the class of this device."""
-        return self._sensor.get(CONF_DEVICE_CLASS)
+    def available(self):
+        return getattr(self._device, "is_available", True)
 
     @property
     def icon(self):
-        """Return the icon of this device."""
-        return self._sensor.get(CONF_ICON)
+        return self._sensor_def.get(CONF_ICON)
+
+    @property
+    def device_class(self):
+        return self._sensor_def.get("SensorDeviceClass.DEVICE_CLASS")
 
     @property
     def unit_of_measurement(self):
-        """Return the unit of measurement."""
-        return self._sensor.get(CONF_UNIT_OF_MEASUREMENT)
-
-    async def async_update(self):
-        """Retrieve latest state."""
-        # _LOGGER.debug("async_update")
-
-
-class AirbnkBatterySensor(AirbnkSensor):
-    """Representation of a Battery Sensor."""
+        return self._sensor_def.get(CONF_UNIT_OF_MEASUREMENT)
 
     @property
-    def state(self):
-        """Return the state of the sensor."""
-        # print("VOLT: {} {}".format(self._monitored_attribute, self._device._lockData))
-        self._device.check_availability()
-        if self._monitored_attribute in self._device._lockData:
-            return self._device._lockData[self._monitored_attribute]
-        return None
+    def device_info(self):
+        return getattr(self._device, "device_info", None)
 
+    def _raw(self):
+        data = getattr(self._device, "_lockData", {})
+        return data.get(self._attr)
+
+
+# ---------------------------------------------------------------------------
+# Legacy sensors (kept for compatibility)
+# ---------------------------------------------------------------------------
 
 class AirbnkTextSensor(AirbnkSensor):
-    """Representation of a generic text sensor."""
+    @property
+    def state(self):
+        return self._raw()
+
+
+class AirbnkLegacyBatterySensor(AirbnkSensor):
+    @property
+    def state(self):
+        return self._raw()
+
+
+# ---------------------------------------------------------------------------
+# Corrected State Sensor
+# ---------------------------------------------------------------------------
+
+class AirbnkStateSensor(AirbnkSensor):
+    """Fix the long-standing inverted state problem."""
 
     @property
     def state(self):
-        """Return the state of the sensor."""
-        if self._monitored_attribute in self._device._lockData:
-            return self._device._lockData[self._monitored_attribute]
-        return None
+        raw = self._raw()
+        if raw is None:
+            return None
+
+        s = str(raw).strip().lower()
+        if s == "locked":
+            return "unlocked"
+        if s == "unlocked":
+            return "locked"
+        return raw
+
+
+# ---------------------------------------------------------------------------
+# Accurate Battery Sensors (MQTT-backed)
+# ---------------------------------------------------------------------------
+
+class _AirbnkMQTTSensor(Entity):
+    """Base class for battery sensors sourced from ESPHome MQTT."""
+
+    should_poll = False
+
+    def __init__(self, hass, device):
+        self.hass = hass
+        self._device = device
+        self._value = None
+        self._unsubscribe = None
+
+    @property
+    def device_info(self):
+        return getattr(self._device, "device_info", None)
+
+    @property
+    def available(self):
+        return True
+
+    async def async_added_to_hass(self):
+        """Subscribe to MQTT telemetry topic."""
+        topic = self._topic
+
+        async def _cb(msg):
+            self._value = msg.payload
+            self.async_write_ha_state()
+
+        self._unsubscribe = await self.hass.components.mqtt.async_subscribe(
+            topic, _cb
+        )
+
+    async def async_will_remove_from_hass(self):
+        if self._unsubscribe:
+            self._unsubscribe()
+
+    @property
+    def state(self):
+        return self._value
+
+
+class AirbnkMQTTBatteryPercent(_AirbnkMQTTSensor):
+    @property
+    def name(self):
+        n = self._device._lockConfig.get("deviceName", "Airbnk Lock")
+        return f"{n} Battery"
+
+    @property
+    def unique_id(self):
+        sn = self._device._lockConfig.get("sn", "unknown")
+        return f"{sn}_battpct"
+
+    @property
+    def device_class(self):
+        return SensorDeviceClass.BATTERY
+
+    @property
+    def unit_of_measurement(self):
+        return "%"
+
+    @property
+    def _topic(self):
+        base = self._device._lockConfig.get("deviceTopic", "parcel-box")
+        return f"{base}/tele/battery_percent"
+
+
+class AirbnkMQTTBatteryVoltage(_AirbnkMQTTSensor):
+    @property
+    def name(self):
+        n = self._device._lockConfig.get("deviceName", "Airbnk Lock")
+        return f"{n} Battery Voltage"
+
+    @property
+    def unique_id(self):
+        sn = self._device._lockConfig.get("sn", "unknown")
+        return f"{sn}_battvolt"
+
+    @property
+    def device_class(self):
+        return SensorDeviceClass.VOLTAGE
+
+    @property
+    def unit_of_measurement(self):
+        return "V"
+
+    @property
+    def _topic(self):
+        base = self._device._lockConfig.get("deviceTopic", "parcel-box")
+        return f"{base}/tele/battery_voltage"
