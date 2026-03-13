@@ -6,14 +6,15 @@ from homeassistant.const import (
     CONF_NAME,
     CONF_TYPE,
     CONF_UNIT_OF_MEASUREMENT,
-    DEVICE_CLASS_BATTERY,
-    DEVICE_CLASS_VOLTAGE,
-    DEVICE_CLASS_SIGNAL_STRENGTH,
     PERCENTAGE,
     ELECTRIC_POTENTIAL_VOLT,
     TIME_SECONDS,
     SIGNAL_STRENGTH_DECIBELS,
 )
+
+# NEW: modern device class enums (replace removed DEVICE_CLASS_* constants)
+from homeassistant.components.sensor import SensorDeviceClass
+from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 
 DOMAIN = "airbnk_mqtt"
 
@@ -71,13 +72,13 @@ SENSOR_TYPES = {
     SENSOR_TYPE_BATTERY: {
         CONF_NAME: "Battery",
         CONF_TYPE: SENSOR_TYPE_BATTERY,
-        CONF_DEVICE_CLASS: DEVICE_CLASS_BATTERY,
+        CONF_DEVICE_CLASS: SensorDeviceClass.BATTERY,
         CONF_UNIT_OF_MEASUREMENT: PERCENTAGE,
     },
     SENSOR_TYPE_VOLTAGE: {
         CONF_NAME: "Battery voltage",
         CONF_TYPE: SENSOR_TYPE_VOLTAGE,
-        CONF_DEVICE_CLASS: DEVICE_CLASS_VOLTAGE,
+        CONF_DEVICE_CLASS: SensorDeviceClass.VOLTAGE,
         CONF_UNIT_OF_MEASUREMENT: ELECTRIC_POTENTIAL_VOLT,
     },
     SENSOR_TYPE_LAST_ADVERT: {
@@ -88,7 +89,7 @@ SENSOR_TYPES = {
     SENSOR_TYPE_SIGNAL_STRENGTH: {
         CONF_NAME: "Signal strength",
         CONF_TYPE: SENSOR_TYPE_SIGNAL_STRENGTH,
-        CONF_DEVICE_CLASS: DEVICE_CLASS_SIGNAL_STRENGTH,
+        CONF_DEVICE_CLASS: SensorDeviceClass.SIGNAL_STRENGTH,
         CONF_UNIT_OF_MEASUREMENT: SIGNAL_STRENGTH_DECIBELS,
     },
     SENSOR_TYPE_LOCK_EVENTS: {
