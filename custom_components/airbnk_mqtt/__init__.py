@@ -48,23 +48,16 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     async def _handle_reload(service):
         """Handle reload service call."""
         _LOGGER.debug("Service %s.reload called: reloading integration", DOMAIN)
-
         current_entries = hass.config_entries.async_entries(DOMAIN)
-
         reload_tasks = [
             hass.config_entries.async_reload(entry.entry_id)
             for entry in current_entries
         ]
-
         await asyncio.gather(*reload_tasks)
         _LOGGER.debug("RELOAD DONE")
 
-    # Admin-only reload service
-    hass.helpers.service.async_register_admin_service(
-        DOMAIN,
-        SERVICE_RELOAD,
-        _handle_reload,
-    )
+    # Modern, supported way to register a service from async_setup
+    hass.services.async_register(DOMAIN, SERVICE_RELOAD, _handle_reload)
 
     if DOMAIN not in config:
         return True
