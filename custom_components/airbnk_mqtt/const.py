@@ -7,12 +7,11 @@ from homeassistant.const import (
     CONF_TYPE,
     CONF_UNIT_OF_MEASUREMENT,
     PERCENTAGE,
-    ELECTRIC_POTENTIAL_VOLT,
-    TIME_SECONDS,
-    SIGNAL_STRENGTH_DECIBELS,
+    UnitOfElectricPotential,
+    UnitOfTime,
 )
 
-# NEW: modern device class enums (replace removed DEVICE_CLASS_* constants)
+# Modern device class enums
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 
@@ -79,18 +78,19 @@ SENSOR_TYPES = {
         CONF_NAME: "Battery voltage",
         CONF_TYPE: SENSOR_TYPE_VOLTAGE,
         CONF_DEVICE_CLASS: SensorDeviceClass.VOLTAGE,
-        CONF_UNIT_OF_MEASUREMENT: ELECTRIC_POTENTIAL_VOLT,
+        CONF_UNIT_OF_MEASUREMENT: UnitOfElectricPotential.VOLT,
     },
     SENSOR_TYPE_LAST_ADVERT: {
         CONF_NAME: "Time from last advert",
         CONF_TYPE: SENSOR_TYPE_LAST_ADVERT,
-        CONF_UNIT_OF_MEASUREMENT: TIME_SECONDS,
+        CONF_UNIT_OF_MEASUREMENT: UnitOfTime.SECONDS,
     },
     SENSOR_TYPE_SIGNAL_STRENGTH: {
         CONF_NAME: "Signal strength",
         CONF_TYPE: SENSOR_TYPE_SIGNAL_STRENGTH,
         CONF_DEVICE_CLASS: SensorDeviceClass.SIGNAL_STRENGTH,
-        CONF_UNIT_OF_MEASUREMENT: SIGNAL_STRENGTH_DECIBELS,
+        # No UnitOfSignalStrength in HA; use literal "dBm"
+        CONF_UNIT_OF_MEASUREMENT: "dBm",
     },
     SENSOR_TYPE_LOCK_EVENTS: {
         CONF_NAME: "Lock events counter",
