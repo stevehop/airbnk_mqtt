@@ -125,10 +125,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][AIRBNK_DEVICES] = lock_devices
 
-    for component in COMPONENT_TYPES:
-        hass.async_create_task(
-            hass.config_entries.async_forward_entry_setup(entry, component)
-        )
+    # Modern HA: forward all platforms in one call
+    await hass.config_entries.async_forward_entry_setups(entry, COMPONENT_TYPES)
     return True
 
 
