@@ -440,25 +440,29 @@ class CustomMqttLockDevice:
     # -------------------- Canonical state + helpers --------------------
 
     def _publish_canonical_text_state(self) -> None:
-        """
-        Publish canonical text state in _lockData[SENSOR_TYPE_STATE] using
-        the current numeric state after any flips, so all entities read the same truth.
-        """
-        if self.curr_state == LOCK_STATE_LOCKED:
-            text_state = "locked"
-        elif self.curr_state == LOCK_STATE_UNLOCKED:
-            text_state = "unlocked"
-        elif self.curr_state == LOCK_STATE_JAMMED:
-            text_state = "jammed"
-        elif self.curr_state == LOCK_STATE_OPERATING:
-            text_state = "operating"
-        elif self.curr_state == LOCK_STATE_FAILED:
-            text_state = "failed"
-        else:
-            # unknown or any future value → expose the raw string for safety
-            text_state = LOCK_STATE_STRINGS.get(self.curr_state, "unknown")
+    """
+    Publish canonical text state in _lockData[SENSOR_TYPE_STATE].
+    HOT-FIX: invert 0/1 semantics so the UI matches the real latch.
+    """
+    value = self.curr_state
+    # Invert only for normal 0/1 states; keep jammed/operating/failed untouched.
+    if value in (LOCK_STATE_LOCKED, LOCK_STATE_UNLOCKED):
+        value = 1 - value  # <--- HOT-FIX flip
 
-        self._lockData[SENSOR_TYPE_STATE] = text_state
+    if value == LOCK_STATE_LOCKED:
+        text_state = "locked"
+    elif value == LOCK_STATE_UNLOCKED:
+        text_state = "unlocked"
+    elif value == LOCK_STATE_JAMMED:
+        text_state = "jammed"
+    elif value == LOCK_STATE_OPERATING:
+        text_state = "operating"
+    elif value == LOCK_STATE_FAILED:
+        text_state = "failed"
+    else:
+        text_state = "unknown"
+
+    self._lockData[SENSOR_TYPE_STATE] = text_state
 
     def calculate_battery_percentage(self, voltage: float) -> float:
         """
