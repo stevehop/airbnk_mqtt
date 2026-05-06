@@ -83,4 +83,3 @@ class AirbnkBatteryLowBinarySensor(AirbnkBinarySensor):
     @property
     def device_class(self) -> BinarySensorDeviceClass | None:
         return BinarySensorDeviceClass.BATTERY
-``
